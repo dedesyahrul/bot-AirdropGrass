@@ -1,11 +1,6 @@
-http://3xzvr5xod15ru7d-country-lu:2dg35aj5qfwavql@rp.proxyscrape.com:6060
-http://3xzvr5xod15ru7d-country-lu:2dg35aj5qfwavql@rp.proxyscrape.com:6060
-http://3xzvr5xod15ru7d-country-lu:2dg35aj5qfwavql@rp.proxyscrape.com:6060
-http://3xzvr5xod15ru7d-country-lu:2dg35aj5qfwavql@rp.proxyscrape.com:6060
-http://3xzvr5xod15ru7d-country-lu:2dg35aj5qfwavql@rp.proxyscrape.com:6060
-http://3xzvr5xod15ru7d-country-lu:2dg35aj5qfwavql@rp.proxyscrape.com:6060
-http://3xzvr5xod15ru7d-country-lu:2dg35aj5qfwavql@rp.proxyscrape.com:6060
-http://3xzvr5xod15ru7d-country-lu:2dg35aj5qfwavql@rp.proxyscrape.com:6060
-http://3xzvr5xod15ru7d-country-lu:2dg35aj5qfwavql@rp.proxyscrape.com:6060
-http://3xzvr5xod15ru7d-country-lu:2dg35aj5qfwavql@rp.proxyscrape.com:6060
-http://3xzvr5xod15ru7d-country-lu:2dg35aj5qfwavql@rp.proxyscrape.com:6060
+http://ip:port
+socks4://ip:port
+socks5://ip:port
+http://user:pass@ip:port
+socks4://user:pass@ip:port
+socks5://user:pass@ip:port
