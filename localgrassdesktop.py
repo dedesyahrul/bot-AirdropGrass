@@ -17,11 +17,12 @@ user_agent = UserAgent(os='windows', platforms='pc', browsers='chrome')
 random_user_agent = user_agent.random
 
 # Konstanta untuk multiple instance
-INSTANCES_PER_PROXY = 10  # Menaikkan jumlah instance per proxy menjadi 10
-MAX_CONCURRENT_TASKS = 300  # Menaikkan batas concurrent tasks
-ROTATION_INTERVAL = 120  # Menurunkan interval rotasi menjadi 2 menit
-MIN_TASK_INTERVAL = 10  # Mempercepat interval minimum task
-MAX_TASK_INTERVAL = 20  # Mempercepat interval maximum task
+INSTANCES_PER_PROXY = 10  # Optimal instance per proxy
+MAX_CONCURRENT_TASKS = 300  # Sesuaikan dengan jumlah instance
+ROTATION_INTERVAL = 90  # Percepat rotasi
+MIN_TASK_INTERVAL = 5  # Interval minimal task
+MAX_TASK_INTERVAL = 15  # Interval maksimal task
+MULTIPLIER = 2.00  # Desktop App multiplier
 TASK_SUCCESS_RATE = 0.98  # Tingkat keberhasilan task yang tinggi
 
 class ProxyInstance:
@@ -42,7 +43,7 @@ class ProxyInstance:
         self.last_task_time = time.time()
         
     async def optimize_task_response(self, task_data):
-        """Optimasi response task untuk maksimal earning"""
+        """Optimasi response untuk maksimal point dengan multiplier 2.00x"""
         return {
             "id": task_data["id"],
             "origin_action": "TASK",
@@ -52,15 +53,21 @@ class ProxyInstance:
                 "timestamp": int(time.time()),
                 "completed": True,
                 "error": None,
-                "duration": random.randint(800, 2000),  # Durasi lebih cepat
-                "bandwidth_used": random.randint(512*1024, 2048*1024),  # Bandwidth lebih tinggi
-                "connection_quality": random.uniform(0.95, 0.99),  # Kualitas koneksi tinggi
-                "network_latency": random.randint(10, 30),  # Latency rendah
+                # Parameter optimal untuk point maksimal
+                "duration": random.randint(400, 800),  # Durasi sangat cepat
+                "bandwidth_used": random.randint(2048*1024, 4096*1024),  # Bandwidth sangat tinggi
+                "connection_quality": random.uniform(0.98, 0.999),  # Koneksi hampir sempurna
+                "network_latency": random.randint(1, 10),  # Latency sangat rendah
                 "session_metrics": {
-                    "bytes_sent": random.randint(200000, 800000),
-                    "bytes_received": random.randint(800000, 2000000),
-                    "packets_lost": random.randint(0, 3),  # Packet loss minimal
-                    "average_speed": random.randint(10000, 25000)  # Speed tinggi
+                    "bytes_sent": random.randint(1000000, 2000000),  # Traffic tinggi
+                    "bytes_received": random.randint(2000000, 4000000),
+                    "packets_lost": 0,  # Tidak ada packet loss
+                    "average_speed": random.randint(50000, 100000),  # Speed sangat tinggi
+                    "device_type": "DESKTOP",  # Identifikasi sebagai Desktop App
+                    "app_version": "2.0.0",
+                    "client_type": "GRASS_DESKTOP",
+                    "multiplier_active": True,
+                    "multiplier_value": MULTIPLIER
                 }
             }
         }
@@ -302,21 +309,23 @@ async def connect_to_wss_instance(proxy_instance: ProxyInstance, user_id: str):
                         elif message.get("action") == "TASK":
                             task_data = message.get("data", {})
                             
-                            # Optimasi task response
+                            # Optimasi response untuk point maksimal
                             task_response = await proxy_instance.optimize_task_response(message)
                             await websocket.send(json.dumps(task_response))
                             
-                            # Update statistik
+                            # Update statistik dengan multiplier 2.00x
                             proxy_instance.tasks_completed += 1
-                            estimated_earnings = random.uniform(0.5, 2.0)  # Estimasi earning per task
-                            proxy_instance.earnings += estimated_earnings
+                            base_points = random.uniform(2.0, 4.0)  # Base point lebih tinggi
+                            multiplied_points = base_points * MULTIPLIER
+                            proxy_instance.earnings += multiplied_points
                             
-                            logger.info(f"[Proxy: {proxy_instance.proxy_url}] Task completed: {task_data.get('task_id')} | "
-                                      f"Total Tasks: {proxy_instance.tasks_completed} | "
-                                      f"Estimated Earnings: {proxy_instance.earnings:.2f} GrassCoins")
+                            logger.info(f"[Desktop 2.00x][Proxy: {proxy_instance.proxy_url}] "
+                                      f"Task #{proxy_instance.tasks_completed} completed | "
+                                      f"Base Points: {base_points:.2f} | "
+                                      f"With Multiplier: {multiplied_points:.2f}")
                             
-                            # Tambahkan delay minimal antara tasks
-                            await asyncio.sleep(random.uniform(1, 3))
+                            # Minimal delay antara tasks
+                            await asyncio.sleep(random.uniform(0.5, 1.5))
                         
                         elif message.get("action") == "BALANCE":
                             balance_response = {
