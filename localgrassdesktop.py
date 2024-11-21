@@ -64,7 +64,7 @@ class ProxyInstance:
                     "packets_lost": 0,  # Tidak ada packet loss
                     "average_speed": random.randint(50000, 100000),  # Speed sangat tinggi
                     "device_type": "DESKTOP",  # Identifikasi sebagai Desktop App
-                    "app_version": "2.0.0",
+                    "app_version": "4.29.0",
                     "client_type": "GRASS_DESKTOP",
                     "multiplier_active": True,
                     "multiplier_value": MULTIPLIER
