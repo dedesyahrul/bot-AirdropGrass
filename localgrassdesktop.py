@@ -20,11 +20,11 @@ random_user_agent = user_agent.random
 INSTANCES_PER_PROXY = 10  # Jumlah ideal per proxy
 MAX_CONCURRENT_TASKS = 300  # Sesuaikan dengan jumlah instance
 ROTATION_INTERVAL = 300  # Rotasi 5 menit (mencegah overuse)
-MIN_TASK_INTERVAL = 15  # Delay minimal antar task
-MAX_TASK_INTERVAL = 30  # Delay maksimal antar task
+MIN_TASK_INTERVAL = 30  # Naikkan delay untuk mengurangi frekuensi task
+MAX_TASK_INTERVAL = 45  # Naikkan delay maksimal
 MULTIPLIER = 2.00  # Desktop App multiplier
 TASK_SUCCESS_RATE = 0.98  # Tingkat keberhasilan task yang tinggi
-TRAFFIC_LIMIT_PER_HOUR = 25 * 1024 * 1024  # Limit 25MB/jam/proxy
+TRAFFIC_LIMIT_PER_HOUR = 208 * 1024  # 208KB per jam (5MB/24jam)
 MAX_RETRIES = 3
 RECONNECT_DELAY = 60
 ERROR_BACKOFF_TIME = 300
@@ -68,12 +68,14 @@ class ProxyInstance:
             self.error_count = 0
 
     async def optimize_task_response(self, task_data):
-        """Optimasi response dengan error handling"""
+        """Optimasi response dengan traffic ultra minimal"""
         try:
-            traffic_chunk = random.randint(30*1024, 60*1024)  # Lebih hemat
+            # Ultra minimal traffic chunk (bytes)
+            traffic_chunk = random.randint(200, 400)  # 200-400 bytes per task
+            
             if self.traffic_used + traffic_chunk > TRAFFIC_LIMIT_PER_HOUR:
                 logger.warning(f"Traffic limit approaching for {self.proxy_url}")
-                await asyncio.sleep(random.uniform(5, 10))
+                await asyncio.sleep(random.uniform(10, 15))
                 
             self.traffic_used += traffic_chunk
             self.total_traffic += traffic_chunk
@@ -87,16 +89,15 @@ class ProxyInstance:
                     "timestamp": int(time.time()),
                     "completed": True,
                     "error": None,
-                    # Parameter minimal untuk residential
-                    "duration": random.randint(1200, 2000),  # Durasi lebih lama
-                    "bandwidth_used": traffic_chunk,  # Traffic sangat minimal
-                    "connection_quality": random.uniform(0.85, 0.90),  # Kualitas cukup
-                    "network_latency": random.randint(50, 100),  # Latency residential
+                    "duration": random.randint(1200, 2000),
+                    "bandwidth_used": traffic_chunk,
+                    "connection_quality": random.uniform(0.85, 0.90),
+                    "network_latency": random.randint(50, 100),
                     "session_metrics": {
-                        "bytes_sent": random.randint(15000, 25000),
-                        "bytes_received": random.randint(25000, 45000),
-                        "packets_lost": random.randint(0, 1),
-                        "average_speed": random.randint(1500, 2500),
+                        "bytes_sent": random.randint(100, 200),     # Ultra minimal
+                        "bytes_received": random.randint(150, 300), # Ultra minimal
+                        "packets_lost": 0,
+                        "average_speed": random.randint(200, 400),  # Reduced speed
                         "device_type": "DESKTOP",
                         "app_version": "4.29.0",
                         "client_type": "GRASS_DESKTOP",
@@ -111,17 +112,20 @@ class ProxyInstance:
             raise
 
     async def check_traffic_limit(self):
-        """Monitor penggunaan traffic residential"""
+        """Monitor penggunaan traffic dengan ketat"""
         current_time = time.time()
+        hourly_limit = TRAFFIC_LIMIT_PER_HOUR / 24  # Bagi rata per jam
+        
         if (current_time - self.last_traffic_check) >= 3600:
             self.traffic_used = 0
             self.last_traffic_check = current_time
             self.is_traffic_limited = False
             return True
             
-        if self.traffic_used >= TRAFFIC_LIMIT_PER_HOUR:
+        if self.traffic_used >= hourly_limit:
             self.is_traffic_limited = True
-            logger.warning(f"Traffic limit reached for proxy {self.proxy_url}")
+            logger.warning(f"Hourly traffic limit reached for {self.proxy_url}")
+            await asyncio.sleep(random.uniform(60, 120))  # Tunggu lebih lama
             return False
             
         return True
