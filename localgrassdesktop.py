@@ -17,13 +17,17 @@ user_agent = UserAgent(os='windows', platforms='pc', browsers='chrome')
 random_user_agent = user_agent.random
 
 # Konstanta untuk multiple instance
-INSTANCES_PER_PROXY = 10  # Optimal instance per proxy
+INSTANCES_PER_PROXY = 10  # Jumlah ideal per proxy
 MAX_CONCURRENT_TASKS = 300  # Sesuaikan dengan jumlah instance
-ROTATION_INTERVAL = 90  # Percepat rotasi
-MIN_TASK_INTERVAL = 5  # Interval minimal task
-MAX_TASK_INTERVAL = 15  # Interval maksimal task
+ROTATION_INTERVAL = 300  # Rotasi 5 menit (mencegah overuse)
+MIN_TASK_INTERVAL = 15  # Delay minimal antar task
+MAX_TASK_INTERVAL = 30  # Delay maksimal antar task
 MULTIPLIER = 2.00  # Desktop App multiplier
 TASK_SUCCESS_RATE = 0.98  # Tingkat keberhasilan task yang tinggi
+TRAFFIC_LIMIT_PER_HOUR = 25 * 1024 * 1024  # Limit 25MB/jam/proxy
+MAX_RETRIES = 3
+RECONNECT_DELAY = 60
+ERROR_BACKOFF_TIME = 300
 
 class ProxyInstance:
     def __init__(self, proxy_url: str, instance_id: int):
@@ -41,36 +45,88 @@ class ProxyInstance:
         self.earnings = 0
         self.tasks_completed = 0
         self.last_task_time = time.time()
+        self.traffic_used = 0
+        self.last_traffic_check = time.time()
+        self.is_traffic_limited = False
+        self.retry_count = 0
+        self.last_error_time = 0
+        self.connection_active = False
+        self.total_traffic = 0
+        self.last_success = time.time()
         
+    async def handle_connection_error(self):
+        self.connection_active = False
+        self.retry_count += 1
+        wait_time = min(ERROR_BACKOFF_TIME * (2 ** (self.retry_count - 1)), 1800)
+        
+        if self.retry_count >= MAX_RETRIES:
+            logger.error(f"Max retries reached for {self.proxy_url}")
+            return False
+            
+        logger.warning(f"Connection error, waiting {wait_time}s before retry")
+        await asyncio.sleep(wait_time)
+        return True
+        
+    async def reset_error_count(self):
+        """Reset error counter after successful connection"""
+        if time.time() - self.last_error_time > 3600:
+            self.retry_count = 0
+            self.error_count = 0
+
     async def optimize_task_response(self, task_data):
-        """Optimasi response untuk maksimal point dengan multiplier 2.00x"""
-        return {
-            "id": task_data["id"],
-            "origin_action": "TASK",
-            "result": {
-                "status": "success",
-                "task_id": task_data.get("task_id"),
-                "timestamp": int(time.time()),
-                "completed": True,
-                "error": None,
-                # Parameter optimal untuk point maksimal
-                "duration": random.randint(400, 800),  # Durasi sangat cepat
-                "bandwidth_used": random.randint(2048*1024, 4096*1024),  # Bandwidth sangat tinggi
-                "connection_quality": random.uniform(0.98, 0.999),  # Koneksi hampir sempurna
-                "network_latency": random.randint(1, 10),  # Latency sangat rendah
-                "session_metrics": {
-                    "bytes_sent": random.randint(1000000, 2000000),  # Traffic tinggi
-                    "bytes_received": random.randint(2000000, 4000000),
-                    "packets_lost": 0,  # Tidak ada packet loss
-                    "average_speed": random.randint(50000, 100000),  # Speed sangat tinggi
-                    "device_type": "DESKTOP",  # Identifikasi sebagai Desktop App
-                    "app_version": "4.29.0",
-                    "client_type": "GRASS_DESKTOP",
-                    "multiplier_active": True,
-                    "multiplier_value": MULTIPLIER
+        """Optimasi response dengan error handling"""
+        try:
+            traffic_chunk = random.randint(30*1024, 60*1024)  # Lebih hemat
+            if self.traffic_used + traffic_chunk > TRAFFIC_LIMIT_PER_HOUR:
+                logger.warning(f"Traffic limit approaching for {self.proxy_url}")
+                await asyncio.sleep(random.uniform(5, 10))
+                
+            self.traffic_used += traffic_chunk
+            self.total_traffic += traffic_chunk
+            
+            return {
+                "id": task_data["id"],
+                "origin_action": "TASK",
+                "result": {
+                    "status": "success",
+                    "task_id": task_data.get("task_id"),
+                    "timestamp": int(time.time()),
+                    "completed": True,
+                    "error": None,
+                    # Parameter minimal untuk residential
+                    "duration": random.randint(1200, 2000),  # Durasi lebih lama
+                    "bandwidth_used": traffic_chunk,  # Traffic sangat minimal
+                    "connection_quality": random.uniform(0.85, 0.90),  # Kualitas cukup
+                    "network_latency": random.randint(50, 100),  # Latency residential
+                    "session_metrics": {
+                        "bytes_sent": random.randint(15000, 25000),
+                        "bytes_received": random.randint(25000, 45000),
+                        "packets_lost": random.randint(0, 1),
+                        "average_speed": random.randint(1500, 2500),
+                        "device_type": "DESKTOP",
+                        "app_version": "4.29.0",
+                        "client_type": "GRASS_DESKTOP",
+                        "multiplier_active": True,
+                        "multiplier_value": MULTIPLIER,
+                        "connection_type": "residential"
+                    }
                 }
             }
-        }
+        except Exception as e:
+            logger.error(f"Error in task response: {str(e)}")
+            raise
+
+    async def check_traffic_limit(self):
+        """Monitor penggunaan traffic residential"""
+        current_time = time.time()
+        hourly_traffic = self.traffic_used
+        if current_time - self.last_traffic_check >= 3600:
+            hourly_traffic = 0
+            self.last_traffic_check = current_time
+            
+        if hourly_traffic >= TRAFFIC_LIMIT_PER_HOUR * 0.9:  # Warning at 90%
+            logger.warning(f"High traffic usage: {hourly_traffic/(1024*1024):.2f}MB")
+            await asyncio.sleep(random.uniform(10, 20))
 
 def generate_hardware_id():
     """Generate hardware ID yang konsisten berdasarkan sistem"""
@@ -174,15 +230,68 @@ async def connect_to_wss_instance(proxy_instance: ProxyInstance, user_id: str):
     """Fungsi koneksi untuk satu instance proxy"""
     while True:
         try:
+            # Tambah pengecekan koneksi aktif
+            if proxy_instance.connection_active:
+                websocket = await proxy_connect(...)
+                
+                # Tambah ping task dengan proper cleanup
+                ping_task = asyncio.create_task(send_ping(websocket, proxy_instance))
+                try:
+                    await handle_messages(websocket, proxy_instance)
+                finally:
+                    if ping_task and not ping_task.done():
+                        ping_task.cancel()
+                    await websocket.close()
+
+            # Cek rotasi sebelum membuat koneksi baru
+            current_time = time.time()
+            if current_time - proxy_instance.last_rotation >= ROTATION_INTERVAL:
+                logger.info(f"Rotating instance {proxy_instance.instance_id} for proxy {proxy_instance.proxy_url}")
+                proxy_instance.last_rotation = current_time
+                proxy_instance.installation_id = str(uuid.uuid4())
+                proxy_instance.connection_active = False  # Set koneksi tidak aktif
+                
+                # Reset beberapa parameter
+                proxy_instance.traffic_used = 0
+                proxy_instance.retry_count = 0
+                proxy_instance.error_count = 0
+                
+                # Tunggu sebentar sebelum reconnect
+                await asyncio.sleep(random.uniform(3, 8))
+                
+                # Force reconnect dengan menutup koneksi lama
+                try:
+                    if 'websocket' in locals():
+                        await websocket.close()
+                except:
+                    pass
+                
+                logger.info(f"Reconnecting instance {proxy_instance.instance_id} after rotation")
+                continue  # Mulai koneksi baru
+                
+            if not proxy_instance.connection_active:
+                await proxy_instance.reset_error_count()
+                
+            # Cek kondisi proxy sebelum connect
+            if proxy_instance.error_count > MAX_RETRIES:
+                await proxy_instance.handle_connection_error()
+                continue
+                
+            # Cek traffic limit sebelum melanjutkan
+            if not await proxy_instance.check_traffic_limit():
+                logger.info(f"Waiting for traffic reset on proxy {proxy_instance.proxy_url}")
+                await asyncio.sleep(300)  # Tunggu 5 menit
+                continue
+                
             proxy_info = get_proxy_info(proxy_instance.proxy_url)
             if not proxy_info:
                 logger.error(f"Failed to get proxy info for {proxy_instance.proxy_url}")
                 return
 
             custom_headers = {
-                "User-Agent": f"WyndVPN/{random.choice(['4.28.1', '4.28.2', '4.28.3'])} (Windows NT 10.0; Win64; x64)",
+                "User-Agent": f"WyndVPN/{random.choice(['4.29.0', '4.29.1', '4.29.2'])} (Windows NT 10.0; Win64; x64)",
                 "X-Client-Type": "desktop",
-                "X-App-Version": "4.28.1",
+                "X-App-Version": "4.29.0",
                 "X-Platform": "windows",
                 "X-Device-Id": proxy_instance.device_id,
                 "X-Installation-Id": proxy_instance.installation_id,
@@ -257,10 +366,10 @@ async def connect_to_wss_instance(proxy_instance: ProxyInstance, user_id: str):
                                     "user_agent": custom_headers['User-Agent'],
                                     "timestamp": int(time.time()),
                                     "device_type": "desktop",
-                                    "version": "4.28.1",
+                                    "version": "4.29.0",
                                     "platform": "windows",
                                     "app_name": "WyndVPN",
-                                    "app_version": "4.28.1",
+                                    "app_version": "4.29.0",
                                     "os": "Windows",
                                     "os_version": "10",
                                     "architecture": "x64",
@@ -277,7 +386,7 @@ async def connect_to_wss_instance(proxy_instance: ProxyInstance, user_id: str):
                                     "client_type": "desktop_app",
                                     "installation_id": proxy_instance.installation_id,
                                     "hardware_id": proxy_instance.hardware_id,
-                                    "build_number": "20231120",
+                                    "build_number": "20241122",
                                     "client_capabilities": ["proxy", "vpn", "bandwidth"],
                                     "proxy_type": "residential",
                                     "proxy_country": proxy_info["country"],
@@ -309,23 +418,22 @@ async def connect_to_wss_instance(proxy_instance: ProxyInstance, user_id: str):
                         elif message.get("action") == "TASK":
                             task_data = message.get("data", {})
                             
-                            # Optimasi response untuk point maksimal
+                            # Optimasi response
                             task_response = await proxy_instance.optimize_task_response(message)
                             await websocket.send(json.dumps(task_response))
                             
-                            # Update statistik dengan multiplier 2.00x
+                            # Update statistik
                             proxy_instance.tasks_completed += 1
-                            base_points = random.uniform(2.0, 4.0)  # Base point lebih tinggi
+                            base_points = random.uniform(1.5, 3.0)  # Sedikit lebih rendah tapi stabil
                             multiplied_points = base_points * MULTIPLIER
                             proxy_instance.earnings += multiplied_points
                             
                             logger.info(f"[Desktop 2.00x][Proxy: {proxy_instance.proxy_url}] "
-                                      f"Task #{proxy_instance.tasks_completed} completed | "
-                                      f"Base Points: {base_points:.2f} | "
-                                      f"With Multiplier: {multiplied_points:.2f}")
+                                      f"Task #{proxy_instance.tasks_completed} | "
+                                      f"Points: {multiplied_points:.2f}")
                             
-                            # Minimal delay antara tasks
-                            await asyncio.sleep(random.uniform(0.5, 1.5))
+                            # Delay lebih lama untuk hemat traffic
+                            await asyncio.sleep(random.uniform(2.0, 4.0))
                         
                         elif message.get("action") == "BALANCE":
                             balance_response = {
@@ -367,32 +475,67 @@ async def manage_proxy_instances(proxy_url: str, user_id: str):
         instances = [ProxyInstance(proxy_url, i) for i in range(INSTANCES_PER_PROXY)]
         tasks = []
         
-        # Monitor earnings
-        async def monitor_earnings():
+        # Monitor gabungan untuk earnings dan resources
+        async def monitor_stats():
             while True:
-                total_earnings = sum(instance.earnings for instance in instances)
-                total_tasks = sum(instance.tasks_completed for instance in instances)
-                logger.info(f"Statistik Earning untuk Proxy {proxy_url}:")
-                logger.info(f"Total Tasks Completed: {total_tasks}")
-                logger.info(f"Total Estimated Earnings: {total_earnings:.2f} GrassCoins")
-                logger.info(f"Average Earning per Task: {(total_earnings/total_tasks if total_tasks > 0 else 0):.3f}")
-                await asyncio.sleep(60)  # Update setiap menit
+                try:
+                    # Earnings stats
+                    total_earnings = sum(instance.earnings for instance in instances)
+                    total_tasks = sum(instance.tasks_completed for instance in instances)
+                    
+                    # Resource stats
+                    active_instances = len([i for i in instances if i.connection_active])
+                    total_traffic = sum(i.total_traffic for i in instances)
+                    error_rates = sum(i.error_count for i in instances) / max(len(instances), 1)
+                    
+                    # Print stats dengan format yang lebih jelas
+                    logger.info("\n" + "="*50)
+                    logger.info(f"PROXY STATS: {proxy_url}")
+                    logger.info("-"*50)
+                    logger.info(f"Tasks Completed    : {total_tasks}")
+                    logger.info(f"Total Earnings    : {total_earnings:.2f} GrassCoins")
+                    logger.info(f"Avg Earning/Task  : {(total_earnings/total_tasks if total_tasks > 0 else 0):.3f}")
+                    logger.info(f"Active Instances  : {active_instances}/{len(instances)}")
+                    logger.info(f"Total Traffic     : {total_traffic/(1024*1024):.2f} MB")
+                    logger.info(f"Error Rate        : {error_rates:.2%}")
+                    logger.info("="*50 + "\n")
+                    
+                    # Tambah delay untuk mengurangi spam log
+                    await asyncio.sleep(60)
+                    
+                except Exception as e:
+                    logger.error(f"Error in monitoring: {str(e)}")
+                    await asyncio.sleep(5)
+                    continue
         
-        # Tambahkan monitoring task
-        tasks.append(asyncio.create_task(monitor_earnings()))
+        # Hanya tambahkan satu task monitoring
+        tasks.append(asyncio.create_task(monitor_stats()))
         
-        # Jalankan instance dengan delay minimal
+        # Jalankan instance dengan delay bertahap
         for i, instance in enumerate(instances):
-            await asyncio.sleep(1)  # Delay 1 detik antar instance
-            tasks.append(connect_to_wss_instance(instance, user_id))
+            instance.connection_active = True  # Set status aktif
+            await asyncio.sleep(1)  # Delay antar instance
+            tasks.append(asyncio.create_task(connect_to_wss_instance(instance, user_id)))
         
+        # Tunggu semua task selesai
         await asyncio.gather(*tasks)
         
     except Exception as e:
-        logger.error(f"Error in proxy management: {e}")
+        logger.error(f"Error in proxy management: {str(e)}")
 
 async def main():
     try:
+        tasks = []
+        cleanup_event = asyncio.Event()
+        
+        async def cleanup():
+            await cleanup_event.wait()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            
+        tasks.append(asyncio.create_task(cleanup()))
+        
         _user_id = input('Please Enter your user ID: ').strip()
         if not _user_id:
             raise ValueError("User ID tidak boleh kosong")
@@ -425,7 +568,9 @@ async def main():
             return
         
     except KeyboardInterrupt:
-        logger.info("Program dihentikan oleh user")
+        cleanup_event.set()
+        logger.info("Shutting down gracefully...")
+        await asyncio.gather(*tasks, return_exceptions=True)
     except Exception as e:
         logger.error(f"Error dalam main: {str(e)}")
 
