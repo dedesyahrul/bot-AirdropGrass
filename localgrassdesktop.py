@@ -55,17 +55,11 @@ class ProxyInstance:
         self.last_success = time.time()
         
     async def handle_connection_error(self):
-        self.connection_active = False
+        """Handle connection errors with exponential backoff"""
         self.retry_count += 1
         wait_time = min(ERROR_BACKOFF_TIME * (2 ** (self.retry_count - 1)), 1800)
-        
-        if self.retry_count >= MAX_RETRIES:
-            logger.error(f"Max retries reached for {self.proxy_url}")
-            return False
-            
-        logger.warning(f"Connection error, waiting {wait_time}s before retry")
+        logger.warning(f"Connection error for {self.proxy_url}, waiting {wait_time}s")
         await asyncio.sleep(wait_time)
-        return True
         
     async def reset_error_count(self):
         """Reset error counter after successful connection"""
@@ -119,14 +113,18 @@ class ProxyInstance:
     async def check_traffic_limit(self):
         """Monitor penggunaan traffic residential"""
         current_time = time.time()
-        hourly_traffic = self.traffic_used
-        if current_time - self.last_traffic_check >= 3600:
-            hourly_traffic = 0
+        if (current_time - self.last_traffic_check) >= 3600:
+            self.traffic_used = 0
             self.last_traffic_check = current_time
+            self.is_traffic_limited = False
+            return True
             
-        if hourly_traffic >= TRAFFIC_LIMIT_PER_HOUR * 0.9:  # Warning at 90%
-            logger.warning(f"High traffic usage: {hourly_traffic/(1024*1024):.2f}MB")
-            await asyncio.sleep(random.uniform(10, 20))
+        if self.traffic_used >= TRAFFIC_LIMIT_PER_HOUR:
+            self.is_traffic_limited = True
+            logger.warning(f"Traffic limit reached for proxy {self.proxy_url}")
+            return False
+            
+        return True
 
 def generate_hardware_id():
     """Generate hardware ID yang konsisten berdasarkan sistem"""
@@ -230,45 +228,6 @@ async def connect_to_wss_instance(proxy_instance: ProxyInstance, user_id: str):
     """Fungsi koneksi untuk satu instance proxy"""
     while True:
         try:
-            # Tambah pengecekan koneksi aktif
-            if proxy_instance.connection_active:
-                websocket = await proxy_connect(...)
-                
-                # Tambah ping task dengan proper cleanup
-                ping_task = asyncio.create_task(send_ping(websocket, proxy_instance))
-                try:
-                    await handle_messages(websocket, proxy_instance)
-                finally:
-                    if ping_task and not ping_task.done():
-                        ping_task.cancel()
-                    await websocket.close()
-
-            # Cek rotasi sebelum membuat koneksi baru
-            current_time = time.time()
-            if current_time - proxy_instance.last_rotation >= ROTATION_INTERVAL:
-                logger.info(f"Rotating instance {proxy_instance.instance_id} for proxy {proxy_instance.proxy_url}")
-                proxy_instance.last_rotation = current_time
-                proxy_instance.installation_id = str(uuid.uuid4())
-                proxy_instance.connection_active = False  # Set koneksi tidak aktif
-                
-                # Reset beberapa parameter
-                proxy_instance.traffic_used = 0
-                proxy_instance.retry_count = 0
-                proxy_instance.error_count = 0
-                
-                # Tunggu sebentar sebelum reconnect
-                await asyncio.sleep(random.uniform(3, 8))
-                
-                # Force reconnect dengan menutup koneksi lama
-                try:
-                    if 'websocket' in locals():
-                        await websocket.close()
-                except:
-                    pass
-                
-                logger.info(f"Reconnecting instance {proxy_instance.instance_id} after rotation")
-                continue  # Mulai koneksi baru
-                
             if not proxy_instance.connection_active:
                 await proxy_instance.reset_error_count()
                 
@@ -525,17 +484,6 @@ async def manage_proxy_instances(proxy_url: str, user_id: str):
 
 async def main():
     try:
-        tasks = []
-        cleanup_event = asyncio.Event()
-        
-        async def cleanup():
-            await cleanup_event.wait()
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            
-        tasks.append(asyncio.create_task(cleanup()))
-        
         _user_id = input('Please Enter your user ID: ').strip()
         if not _user_id:
             raise ValueError("User ID tidak boleh kosong")
@@ -568,9 +516,7 @@ async def main():
             return
         
     except KeyboardInterrupt:
-        cleanup_event.set()
-        logger.info("Shutting down gracefully...")
-        await asyncio.gather(*tasks, return_exceptions=True)
+        logger.info("Program dihentikan oleh user")
     except Exception as e:
         logger.error(f"Error dalam main: {str(e)}")
 
