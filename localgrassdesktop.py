@@ -19,9 +19,9 @@ random_user_agent = user_agent.random
 # Konstanta untuk multiple instance
 INSTANCES_PER_PROXY = 10  # Optimal instance per proxy
 MAX_CONCURRENT_TASKS = 300  # Sesuaikan dengan jumlah instance
-ROTATION_INTERVAL = 90  # Percepat rotasi
-MIN_TASK_INTERVAL = 5  # Interval minimal task
-MAX_TASK_INTERVAL = 15  # Interval maksimal task
+ROTATION_INTERVAL = 60  # Percepat rotasi
+MIN_TASK_INTERVAL = 2  # Interval minimal task
+MAX_TASK_INTERVAL = 8  # Interval maksimal task
 MULTIPLIER = 2.00  # Desktop App multiplier
 TASK_SUCCESS_RATE = 0.98  # Tingkat keberhasilan task yang tinggi
 
@@ -54,18 +54,18 @@ class ProxyInstance:
                 "completed": True,
                 "error": None,
                 # Parameter optimal untuk point maksimal
-                "duration": random.randint(400, 800),  # Durasi sangat cepat
-                "bandwidth_used": random.randint(2048*1024, 4096*1024),  # Bandwidth sangat tinggi
-                "connection_quality": random.uniform(0.98, 0.999),  # Koneksi hampir sempurna
-                "network_latency": random.randint(1, 10),  # Latency sangat rendah
+                "duration": random.randint(200, 400),  # Kurangi dari 400-800
+                "bandwidth_used": random.randint(1024*1024, 2048*1024),  # Sesuaikan bandwidth
+                "connection_quality": random.uniform(0.95, 0.98),  # Lebih realistis
+                "network_latency": random.randint(15, 45),  # Latency lebih realistis
                 "session_metrics": {
-                    "bytes_sent": random.randint(1000000, 2000000),  # Traffic tinggi
-                    "bytes_received": random.randint(2000000, 4000000),
-                    "packets_lost": 0,  # Tidak ada packet loss
-                    "average_speed": random.randint(50000, 100000),  # Speed sangat tinggi
-                    "device_type": "DESKTOP",  # Identifikasi sebagai Desktop App
+                    "bytes_sent": random.randint(100000, 500000),  # Kurangi traffic
+                    "bytes_received": random.randint(500000, 1000000),
+                    "packets_lost": random.randint(0, 2),  # Tambah sedikit packet loss
+                    "average_speed": random.randint(10000, 30000),  # Speed lebih realistis
+                    "device_type": "desktop",  # Identifikasi sebagai Desktop App
                     "app_version": "4.29.0",
-                    "client_type": "GRASS_DESKTOP",
+                    "client_type": "desktop_app",
                     "multiplier_active": True,
                     "multiplier_value": MULTIPLIER
                 }
@@ -196,7 +196,12 @@ async def connect_to_wss_instance(proxy_instance: ProxyInstance, user_id: str):
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
             
-            urilist = ["wss://proxy2.wynd.network:4444/","wss://proxy2.wynd.network:4650/"]
+            urilist = [
+                "wss://proxy2.wynd.network:4444/",
+                "wss://proxy2.wynd.network:4650/",
+                "wss://proxy1.wynd.network:4444/",  # Tambah variasi
+                "wss://proxy1.wynd.network:4650/"   # Tambah variasi
+            ]
             uri = random.choice(urilist)
             server_hostname = "proxy2.wynd.network"
             
@@ -257,10 +262,10 @@ async def connect_to_wss_instance(proxy_instance: ProxyInstance, user_id: str):
                                     "user_agent": custom_headers['User-Agent'],
                                     "timestamp": int(time.time()),
                                     "device_type": "desktop",
-                                    "version": "4.28.1",
+                                    "version": "4.29.0",
                                     "platform": "windows",
                                     "app_name": "WyndVPN",
-                                    "app_version": "4.28.1",
+                                    "app_version": "4.29.0",
                                     "os": "Windows",
                                     "os_version": "10",
                                     "architecture": "x64",
@@ -277,7 +282,7 @@ async def connect_to_wss_instance(proxy_instance: ProxyInstance, user_id: str):
                                     "client_type": "desktop_app",
                                     "installation_id": proxy_instance.installation_id,
                                     "hardware_id": proxy_instance.hardware_id,
-                                    "build_number": "20231120",
+                                    "build_number": "20240101",
                                     "client_capabilities": ["proxy", "vpn", "bandwidth"],
                                     "proxy_type": "residential",
                                     "proxy_country": proxy_info["country"],
