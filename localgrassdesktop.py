@@ -12,18 +12,23 @@ from fake_useragent import UserAgent
 from itertools import product
 import threading
 from concurrent.futures import ThreadPoolExecutor
+import aiohttp
+import websockets
 
 user_agent = UserAgent(os='windows', platforms='pc', browsers='chrome')
 random_user_agent = user_agent.random
 
 # Konstanta untuk multiple instance
-INSTANCES_PER_PROXY = 10  # Optimal instance per proxy
-MAX_CONCURRENT_TASKS = 300  # Sesuaikan dengan jumlah instance
-ROTATION_INTERVAL = 60  # Percepat rotasi
-MIN_TASK_INTERVAL = 2  # Interval minimal task
-MAX_TASK_INTERVAL = 8  # Interval maksimal task
-MULTIPLIER = 2.00  # Desktop App multiplier
+INSTANCES_PER_PROXY = 15  # Tingkatkan jumlah instance
+MAX_CONCURRENT_TASKS = 500  # Tingkatkan concurrent tasks
+ROTATION_INTERVAL = 7200  # Rotasi setiap 2 jam
+MIN_TASK_INTERVAL = 1  # Kurangi interval minimal
+MAX_TASK_INTERVAL = 3  # Kurangi interval maksimal
+MULTIPLIER = 2.00
+RETRY_DELAY = 10  # Tingkatkan delay retry
+MAX_RETRIES = 10  # Tingkatkan retry
 TASK_SUCCESS_RATE = 0.98  # Tingkat keberhasilan task yang tinggi
+RECONNECT_COOLDOWN = 30  # Tambah cooldown sebelum reconnect
 
 class ProxyInstance:
     def __init__(self, proxy_url: str, instance_id: int):
@@ -41,6 +46,20 @@ class ProxyInstance:
         self.earnings = 0
         self.tasks_completed = 0
         self.last_task_time = time.time()
+        self.consecutive_errors = 0  # Tambah tracking error beruntun
+        self.last_success = time.time()
+        self.backoff_time = RETRY_DELAY  # Waktu tunggu yang dinamis
+        
+    def reset_error_stats(self):
+        """Reset statistik error setelah koneksi sukses"""
+        self.consecutive_errors = 0
+        self.backoff_time = RETRY_DELAY
+        self.last_success = time.time()
+        
+    def calculate_backoff(self):
+        """Hitung waktu tunggu eksponensial"""
+        self.backoff_time = min(300, self.backoff_time * 2)  # Max 5 menit
+        return self.backoff_time
         
     async def optimize_task_response(self, task_data):
         """Optimasi response untuk maksimal point dengan multiplier 2.00x"""
@@ -53,17 +72,16 @@ class ProxyInstance:
                 "timestamp": int(time.time()),
                 "completed": True,
                 "error": None,
-                # Parameter optimal untuk point maksimal
-                "duration": random.randint(200, 400),  # Kurangi dari 400-800
-                "bandwidth_used": random.randint(1024*1024, 2048*1024),  # Sesuaikan bandwidth
-                "connection_quality": random.uniform(0.95, 0.98),  # Lebih realistis
-                "network_latency": random.randint(15, 45),  # Latency lebih realistis
+                "duration": random.randint(150, 300),  # Durasi lebih cepat
+                "bandwidth_used": random.randint(512*1024, 1024*1024),  # Bandwidth lebih efisien
+                "connection_quality": random.uniform(0.97, 0.99),  # Kualitas lebih tinggi
+                "network_latency": random.randint(10, 30),  # Latency lebih rendah
                 "session_metrics": {
-                    "bytes_sent": random.randint(100000, 500000),  # Kurangi traffic
-                    "bytes_received": random.randint(500000, 1000000),
-                    "packets_lost": random.randint(0, 2),  # Tambah sedikit packet loss
-                    "average_speed": random.randint(10000, 30000),  # Speed lebih realistis
-                    "device_type": "desktop",  # Identifikasi sebagai Desktop App
+                    "bytes_sent": random.randint(50000, 200000),
+                    "bytes_received": random.randint(200000, 500000),
+                    "packets_lost": 0,  # Hilangkan packet loss
+                    "average_speed": random.randint(20000, 50000),
+                    "device_type": "desktop",
                     "app_version": "4.29.0",
                     "client_type": "desktop_app",
                     "multiplier_active": True,
@@ -171,9 +189,18 @@ def get_proxy_info(proxy_url):
         return None
 
 async def connect_to_wss_instance(proxy_instance: ProxyInstance, user_id: str):
-    """Fungsi koneksi untuk satu instance proxy"""
+    """Fungsi koneksi untuk satu instance proxy dengan penanganan error yang lebih baik"""
     while True:
         try:
+            # Implementasi circuit breaker yang lebih sophisticated
+            if proxy_instance.consecutive_errors >= 5:
+                logger.warning(f"Circuit breaker active for proxy {proxy_instance.proxy_url}")
+                await asyncio.sleep(proxy_instance.calculate_backoff())
+            
+            # Tambahkan connection pooling
+            connector = aiohttp.TCPConnector(ssl=False, limit=100)
+            timeout = aiohttp.ClientTimeout(total=30)
+            
             proxy_info = get_proxy_info(proxy_instance.proxy_url)
             if not proxy_info:
                 logger.error(f"Failed to get proxy info for {proxy_instance.proxy_url}")
@@ -357,44 +384,77 @@ async def connect_to_wss_instance(proxy_instance: ProxyInstance, user_id: str):
             if current_time - proxy_instance.last_rotation >= ROTATION_INTERVAL:
                 logger.info(f"Rotating instance {proxy_instance.instance_id} for proxy {proxy_instance.proxy_url}")
                 proxy_instance.last_rotation = current_time
-                proxy_instance.installation_id = str(uuid.uuid4())  # Generate ID baru
+                proxy_instance.installation_id = str(uuid.uuid4())
                 await asyncio.sleep(random.uniform(1, 5))
                 continue
 
+        except (websockets.exceptions.ConnectionClosed, 
+                websockets.exceptions.ConnectionClosedError,
+                websockets.exceptions.ConnectionClosedOK) as ws_error:
+            logger.warning(f"WebSocket connection closed for proxy {proxy_instance.proxy_url}: {ws_error}")
+            proxy_instance.consecutive_errors += 1
+            await asyncio.sleep(RECONNECT_COOLDOWN)
+            
         except Exception as e:
-            proxy_instance.error_count += 1
-            logger.error(f"Error in instance {proxy_instance.instance_id} for proxy {proxy_instance.proxy_url}: {e}")
+            logger.error(f"Error in instance {proxy_instance.instance_id}: {e}")
+            proxy_instance.consecutive_errors += 1
+            await asyncio.sleep(proxy_instance.calculate_backoff())
+            
+        finally:
+            # Pastikan ada jeda sebelum mencoba koneksi ulang
             await asyncio.sleep(random.uniform(5, 15))
 
 async def manage_proxy_instances(proxy_url: str, user_id: str):
-    """Mengelola multiple instance dengan optimasi earning"""
+    """Mengelola multiple instance dengan penanganan error yang lebih baik"""
     try:
+        # Tambah connection pooling yang lebih conservative
+        connector = aiohttp.TCPConnector(
+            ssl=False,
+            limit_per_host=20,
+            keepalive_timeout=60,
+            enable_cleanup_closed=True
+        )
+        
+        # Kurangi jumlah concurrent connections per proxy
+        rate_limiter = asyncio.Semaphore(20)
+        
         instances = [ProxyInstance(proxy_url, i) for i in range(INSTANCES_PER_PROXY)]
         tasks = []
         
-        # Monitor earnings
-        async def monitor_earnings():
+        # Tambahkan monitoring yang lebih detail
+        async def enhanced_monitor():
             while True:
                 total_earnings = sum(instance.earnings for instance in instances)
                 total_tasks = sum(instance.tasks_completed for instance in instances)
-                logger.info(f"Statistik Earning untuk Proxy {proxy_url}:")
-                logger.info(f"Total Tasks Completed: {total_tasks}")
-                logger.info(f"Total Estimated Earnings: {total_earnings:.2f} GrassCoins")
-                logger.info(f"Average Earning per Task: {(total_earnings/total_tasks if total_tasks > 0 else 0):.3f}")
-                await asyncio.sleep(60)  # Update setiap menit
+                success_rate = sum(instance.success_count for instance in instances) / (total_tasks if total_tasks > 0 else 1)
+                
+                logger.info(f"""
+                Statistik Detail:
+                - Total Tasks: {total_tasks}
+                - Total Earnings: {total_earnings:.2f}
+                - Success Rate: {success_rate:.2%}
+                - Avg Earning/Task: {(total_earnings/total_tasks if total_tasks > 0 else 0):.3f}
+                - Active Instances: {len([i for i in instances if i.last_task > time.time() - 300])}
+                """)
+                await asyncio.sleep(30)
         
-        # Tambahkan monitoring task
-        tasks.append(asyncio.create_task(monitor_earnings()))
+        tasks.append(asyncio.create_task(enhanced_monitor()))
         
-        # Jalankan instance dengan delay minimal
-        for i, instance in enumerate(instances):
-            await asyncio.sleep(1)  # Delay 1 detik antar instance
-            tasks.append(connect_to_wss_instance(instance, user_id))
+        # Jalankan instances dengan rate limiting
+        async def run_instance(instance):
+            async with rate_limiter:
+                return await connect_to_wss_instance(instance, user_id)
+        
+        for instance in instances:
+            tasks.append(run_instance(instance))
         
         await asyncio.gather(*tasks)
         
     except Exception as e:
         logger.error(f"Error in proxy management: {e}")
+    finally:
+        if connector:
+            await connector.close()
 
 async def main():
     try:
